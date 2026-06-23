@@ -170,13 +170,11 @@ export default function App() {
         );
       }
 
-      // 완료 판정: IME 조합이 끝난 상태에서 지문 끝까지 도달
-      const slicedArr = Array.from(sliced);
-      if (!composing && slicedArr.length >= targetArr.length) {
-        finishTest(sliced);
-      }
+      // 자동 완료 없음: 지문 길이를 다 채워도 종료하지 않는다.
+      // 종료는 오직 Enter keydown 핸들러에서만 일어난다.
+      // (입력은 위에서 targetArr.length 로 잘려 더 길게 못 친다 → "Enter로 완료" 대기 상태)
     },
-    [result, startTime, targetArr, typed, finishTest]
+    [result, startTime, targetArr, typed]
   );
 
   const reset = useCallback(
@@ -405,12 +403,20 @@ export default function App() {
         {/* 안내 배지 */}
         {!result && (
           <div className="flex flex-wrap items-center justify-center gap-2 text-[11px]">
-            <span className="rounded-full border border-rose-400/20 bg-rose-400/5 px-3 py-1 text-rose-200/70">
-              ⌫ 백스페이스 금지 — 한 번 친 글자는 못 지웁니다
-            </span>
-            <span className="rounded-full border border-violet-400/20 bg-violet-400/5 px-3 py-1 text-violet-200/70">
-              결과는 끝나고 확인 — 정답·오답 미리보기 없음
-            </span>
+            {caretIndex >= targetArr.length && targetArr.length > 0 ? (
+              <span className="pop-in rounded-full border border-fuchsia-400/40 bg-fuchsia-400/10 px-3 py-1 font-semibold text-fuchsia-200">
+                끝까지 다 쳤어요! <kbd className="rounded bg-fuchsia-400/20 px-1.5 py-0.5">Enter</kbd> 로 완료
+              </span>
+            ) : (
+              <>
+                <span className="rounded-full border border-rose-400/20 bg-rose-400/5 px-3 py-1 text-rose-200/70">
+                  ⌫ 백스페이스 금지 — 한 번 친 글자는 못 지웁니다
+                </span>
+                <span className="rounded-full border border-violet-400/20 bg-violet-400/5 px-3 py-1 text-violet-200/70">
+                  결과는 끝나고 확인 — 정답·오답 미리보기 없음
+                </span>
+              </>
+            )}
           </div>
         )}
 
