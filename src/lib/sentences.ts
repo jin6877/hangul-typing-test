@@ -1,10 +1,16 @@
+export type Lang = "ko" | "en";
+export type Length = "short" | "long";
+
+// 하위 호환을 위한 별칭 (이전엔 Mode = "short" | "long" 이었음)
+export type Mode = Length;
+
 export interface SentencePool {
   short: string[];
   long: string[];
 }
 
 // 한국어 명언/문장 풀
-export const SENTENCES: SentencePool = {
+const KO: SentencePool = {
   short: [
     "오늘 걷지 않으면 내일은 뛰어야 한다.",
     "시작이 반이다.",
@@ -29,10 +35,43 @@ export const SENTENCES: SentencePool = {
   ],
 };
 
-export type Mode = "short" | "long";
+// 영어 명언/문장 풀
+const EN: SentencePool = {
+  short: [
+    "The only way to do great work is to love what you do.",
+    "Whether you think you can or you can't, you're right.",
+    "Success is not final, failure is not fatal.",
+    "It always seems impossible until it is done.",
+    "The journey of a thousand miles begins with one step.",
+    "Quality is not an act, it is a habit.",
+    "Do what you can with what you have where you are.",
+    "Dream big and dare to fail every single day.",
+    "Little by little, one travels far across the world.",
+    "The best way to predict the future is to create it.",
+    "Stay hungry, stay foolish, and keep moving forward.",
+    "Hard work beats talent when talent fails to work.",
+  ],
+  long: [
+    "Success is the sum of small efforts repeated day in and day out, and there is no shortcut that lets you skip the quiet hours of practice that quietly shape who you become.",
+    "The greatest glory in living lies not in never falling, but in rising every time we fall; what truly matters is the unbreakable spirit that refuses to give up.",
+    "Whatever you can do or dream you can, begin it now, for boldness has genius, power, and magic in it, and the world tends to make room for those who keep walking.",
+    "Believe you can and you are already halfway there, so silence the doubt that whispers in your ear and take one more honest step toward the goal you have chosen.",
+    "Everything looks impossible before it is attempted, yet once it is finished you finally realize that it was always within your reach if only you had simply started.",
+    "A happy life does not require something grand; it asks only for the willingness to be present in this moment and to feel grateful for the small things around you.",
+  ],
+};
 
-export function pickRandom(mode: Mode, exclude?: string): string {
-  const pool = SENTENCES[mode];
+const POOLS: Record<Lang, SentencePool> = { ko: KO, en: EN };
+
+// 하위 호환: 기존 import { SENTENCES } 사용처를 위해 한국어 풀을 노출
+export const SENTENCES: SentencePool = KO;
+
+export function pickRandom(
+  lang: Lang,
+  length: Length,
+  exclude?: string
+): string {
+  const pool = POOLS[lang][length];
   let choice = pool[Math.floor(Math.random() * pool.length)];
   if (exclude && pool.length > 1) {
     let guard = 0;

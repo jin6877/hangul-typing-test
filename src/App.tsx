@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { keystrokesForText } from "./lib/hangul";
-import { pickRandom, type Mode } from "./lib/sentences";
+import { keystrokesForText, wordsForText } from "./lib/hangul";
+import { pickRandom, type Lang, type Length } from "./lib/sentences";
 import { getBest, saveBest, type BestRecord } from "./lib/records";
 
 interface Result {
   kpm: number; // 타/분
   cpm: number; // 글자/분
-  wpm: number; // 영문 환산 (5타 = 1 word 표준)
+  wpm: number; // 단어/분 (5타 = 1 word 표준)
   accuracy: number; // %
   seconds: number;
   totalChars: number;
@@ -15,17 +15,22 @@ interface Result {
 }
 
 export default function App() {
-  const [mode, setMode] = useState<Mode>("short");
-  const [target, setTarget] = useState(() => pickRandom("short"));
+  const [lang, setLang] = useState<Lang>("ko");
+  const [length, setLength] = useState<Length>("short");
+  const [target, setTarget] = useState(() => pickRandom("ko", "short"));
   const [typed, setTyped] = useState("");
   const [startTime, setStartTime] = useState<number | null>(null);
   const [now, setNow] = useState<number>(Date.now());
   const [result, setResult] = useState<Result | null>(null);
-  const [best, setBest] = useState<BestRecord | null>(() => getBest("short"));
+  const [best, setBest] = useState<BestRecord | null>(() =>
+    getBest("ko", "short")
+  );
   const [maxErrors, setMaxErrors] = useState(0); // 누적 오타(틀린 적 있는 위치 수)
 
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const composingRef = useRef(false);
+
+  const isEn = lang === "en";
 
   // 실시간 표시용 타이머 (타이핑 중일 때만 갱신)
   useEffect(() => {
@@ -50,6 +55,15 @@ export default function App() {
 
   const caretIndex = Array.from(typed).length;
 
+  // 주지표: 한글은 KPM(타/분), 영문은 WPM(단어/분)
+  const metric = useMemo(
+    () =>
+      isEn
+        ? { label: "WPM (단어/분)", key: "wpm" as const }
+        : { label: "타/분 (KPM)", key: "kpm" as const },
+    [isEn]
+  );
+
   // 실시간 통계
   const liveStats = useMemo(() => {
     const elapsed =
@@ -59,11 +73,13 @@ export default function App() {
     for (let i = 0; i < committed.length; i++) {
       if (committed[i] === targetArr[i]) correctChars++;
     }
-    // 입력한 만큼의 목표 텍스트 타건수 기반 KPM
-    const strokes = keystrokesForText(
-      targetArr.slice(0, committed.length).join("")
-    );
+    // 입력한 만큼의 목표 텍스트 기준으로 측정 (실제 친 분량만 카운트)
+    const typedTarget = targetArr.slice(0, committed.length).join("");
+    const strokes = keystrokesForText(typedTarget);
     const kpm = elapsed > 0 ? Math.round((strokes / elapsed) * 60) : 0;
+    const wpm =
+      elapsed > 0 ? Math.round((wordsForText(typedTarget) / elapsed) * 60) : 0;
+    const primary = isEn ? wpm : kpm;
     const accuracy =
       committed.length > 0
         ? Math.round((correctChars / committed.length) * 100)
@@ -72,8 +88,8 @@ export default function App() {
       targetArr.length > 0
         ? Math.min(committed.length / targetArr.length, 1)
         : 0;
-    return { elapsed, kpm, accuracy, progress };
-  }, [now, startTime, typed, targetArr]);
+    return { elapsed, kpm, wpm, primary, accuracy, progress };
+  }, [now, startTime, typed, targetArr, isEn]);
 
   const finishTest = useCallback(
     (finalTyped: string) => {
@@ -88,7 +104,7 @@ export default function App() {
       const safeSec = Math.max(seconds, 0.001);
       const kpm = Math.round((totalStrokes / safeSec) * 60);
       const cpm = Math.round((targetArr.length / safeSec) * 60);
-      const wpm = Math.round((totalStrokes / 5 / safeSec) * 60);
+      const wpm = Math.round((wordsForText(target) / safeSec) * 60);
       const errors = Math.max(maxErrors, targetArr.length - correctChars);
       const accuracy =
         targetArr.length > 0
@@ -97,11 +113,11 @@ export default function App() {
 
       const rec: BestRecord = {
         kpm,
-        accuracy,
         wpm,
+        accuracy,
         date: new Date().toISOString(),
       };
-      const isBest = saveBest(mode, rec);
+      const isBest = saveBest(lang, length, rec);
       if (isBest) setBest(rec);
 
       setResult({
@@ -115,15 +131,16 @@ export default function App() {
         isBest,
       });
     },
-    [startTime, target, targetArr, mode, maxErrors]
+    [startTime, target, targetArr, lang, length, maxErrors]
   );
 
   const applyValue = useCallback(
     (value: string) => {
       if (result) return;
       if (startTime === null && value.length > 0) {
-        setStartTime(Date.now());
-        setNow(Date.now());
+        const t = Date.now();
+        setStartTime(t);
+        setNow(t);
       }
       // 목표 길이를 넘어서지 않게 자르기
       const valArr = Array.from(value);
@@ -151,25 +168,33 @@ export default function App() {
   );
 
   const reset = useCallback(
-    (newMode?: Mode) => {
-      const m = newMode ?? mode;
-      setTarget(pickRandom(m, newMode ? undefined : target));
+    (next?: { lang?: Lang; length?: Length }) => {
+      const l = next?.lang ?? lang;
+      const len = next?.length ?? length;
+      const keepExclude = next ? undefined : target;
+      setTarget(pickRandom(l, len, keepExclude));
       setTyped("");
       setStartTime(null);
       setResult(null);
       setMaxErrors(0);
       setNow(Date.now());
-      setBest(getBest(m));
+      setBest(getBest(l, len));
       composingRef.current = false;
       setTimeout(() => inputRef.current?.focus(), 0);
     },
-    [mode, target]
+    [lang, length, target]
   );
 
-  const switchMode = (m: Mode) => {
-    if (m === mode) return;
-    setMode(m);
-    reset(m);
+  const switchLang = (l: Lang) => {
+    if (l === lang) return;
+    setLang(l);
+    reset({ lang: l });
+  };
+
+  const switchLength = (len: Length) => {
+    if (len === length) return;
+    setLength(len);
+    reset({ length: len });
   };
 
   // 키보드 단축키
@@ -191,6 +216,9 @@ export default function App() {
     inputRef.current?.focus();
   }, []);
 
+  const bestLabel = isEn ? "WPM" : "타/분";
+  const bestValue = best ? (isEn ? best.wpm : best.kpm) : null;
+
   return (
     <div className="min-h-svh w-full bg-[#0b0a12] font-mono text-violet-50 selection:bg-violet-500/40">
       {/* 배경 글로우 */}
@@ -204,40 +232,60 @@ export default function App() {
         <header className="flex flex-col items-center gap-3 text-center">
           <div className="flex items-center gap-2 rounded-full border border-violet-400/30 bg-violet-400/5 px-3 py-1 text-xs text-violet-300">
             <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-violet-400" />
-            한글 타이핑 속도 테스트
+            한글 · 영문 타이핑 속도 테스트
           </div>
           <h1 className="bg-gradient-to-r from-violet-300 via-fuchsia-200 to-rose-300 bg-clip-text text-3xl font-bold tracking-tight text-transparent sm:text-4xl">
-            타닥타닥 · 타건수 측정기
+            타닥타닥 · 타이핑 측정기
           </h1>
           <p className="max-w-md text-sm text-violet-200/60">
-            자모 분해 기반의 정확한 한글 타수(KPM)와 정확도를 실시간으로
-            측정합니다.
+            {isEn
+              ? "영문 지문으로 WPM(분당 단어)과 정확도를 실시간으로 측정합니다."
+              : "자모 분해 기반의 정확한 한글 타수(KPM)와 정확도를 실시간으로 측정합니다."}
           </p>
         </header>
 
-        {/* 모드 + 최고기록 */}
+        {/* 언어 토글 */}
+        <div className="flex justify-center">
+          <div className="flex rounded-xl border border-white/10 bg-white/5 p-1">
+            {(["ko", "en"] as Lang[]).map((l) => (
+              <button
+                key={l}
+                onClick={() => switchLang(l)}
+                className={`rounded-lg px-5 py-1.5 text-sm font-semibold transition ${
+                  lang === l
+                    ? "bg-fuchsia-500 text-white shadow-lg shadow-fuchsia-500/30"
+                    : "text-violet-200/60 hover:text-violet-100"
+                }`}
+              >
+                {l === "ko" ? "한글" : "영문"}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* 글 길이 + 최고기록 */}
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex rounded-xl border border-white/10 bg-white/5 p-1">
-            {(["short", "long"] as Mode[]).map((m) => (
+            {(["short", "long"] as Length[]).map((len) => (
               <button
-                key={m}
-                onClick={() => switchMode(m)}
+                key={len}
+                onClick={() => switchLength(len)}
                 className={`rounded-lg px-4 py-1.5 text-sm font-medium transition ${
-                  mode === m
+                  length === len
                     ? "bg-violet-500 text-white shadow-lg shadow-violet-500/30"
                     : "text-violet-200/60 hover:text-violet-100"
                 }`}
               >
-                {m === "short" ? "짧은 글" : "긴 글"}
+                {len === "short" ? "짧은 글" : "긴 글"}
               </button>
             ))}
           </div>
 
           <div className="flex items-center gap-2 rounded-xl border border-amber-300/20 bg-amber-300/5 px-3 py-1.5 text-xs">
             <span className="text-amber-300/80">최고</span>
-            {best ? (
+            {bestValue !== null && best ? (
               <span className="font-bold text-amber-100">
-                {best.kpm.toLocaleString()} 타/분
+                {bestValue.toLocaleString()} {bestLabel}
                 <span className="ml-1 font-normal text-amber-200/50">
                   ({best.accuracy}%)
                 </span>
@@ -279,7 +327,7 @@ export default function App() {
                   {isCaret && (
                     <span className="caret-blink absolute -left-[2px] top-1/2 h-7 w-[3px] -translate-y-1/2 rounded-full bg-fuchsia-400 sm:h-8" />
                   )}
-                  {ch === " " ? " " : ch}
+                  {ch === " " ? " " : ch}
                 </span>
               );
             })}
@@ -313,8 +361,8 @@ export default function App() {
         {!result && (
           <div className="grid grid-cols-3 gap-3">
             <LiveStat
-              label="타/분 (KPM)"
-              value={liveStats.kpm.toLocaleString()}
+              label={metric.label}
+              value={liveStats.primary.toLocaleString()}
               accent="violet"
             />
             <LiveStat
@@ -344,17 +392,38 @@ export default function App() {
             </div>
 
             <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-              <ResultStat
-                big
-                label="타/분 (KPM)"
-                value={result.kpm.toLocaleString()}
-              />
-              <ResultStat label="정확도" value={`${result.accuracy}%`} />
-              <ResultStat label="WPM (영문)" value={String(result.wpm)} />
-              <ResultStat
-                label="시간"
-                value={`${result.seconds.toFixed(1)}s`}
-              />
+              {isEn ? (
+                <>
+                  <ResultStat
+                    big
+                    label="WPM (단어/분)"
+                    value={result.wpm.toLocaleString()}
+                  />
+                  <ResultStat label="정확도" value={`${result.accuracy}%`} />
+                  <ResultStat
+                    label="타/분 (KPM)"
+                    value={result.kpm.toLocaleString()}
+                  />
+                  <ResultStat
+                    label="시간"
+                    value={`${result.seconds.toFixed(1)}s`}
+                  />
+                </>
+              ) : (
+                <>
+                  <ResultStat
+                    big
+                    label="타/분 (KPM)"
+                    value={result.kpm.toLocaleString()}
+                  />
+                  <ResultStat label="정확도" value={`${result.accuracy}%`} />
+                  <ResultStat label="WPM (단어)" value={String(result.wpm)} />
+                  <ResultStat
+                    label="시간"
+                    value={`${result.seconds.toFixed(1)}s`}
+                  />
+                </>
+              )}
             </div>
 
             <div className="mt-5 flex flex-wrap items-center justify-center gap-x-5 gap-y-1 text-xs text-violet-200/50">
@@ -392,8 +461,9 @@ export default function App() {
         )}
 
         <div className="mt-auto pt-4 text-center text-[11px] text-violet-200/30">
-          자모(초성·중성·종성) 분해 기반 타건수 계산 · 모든 처리는 브라우저에서만
-          이루어집니다
+          {isEn
+            ? "표준 WPM(5타=1단어) 환산 · 모든 처리는 브라우저에서만 이루어집니다"
+            : "자모(초성·중성·종성) 분해 기반 타건수 계산 · 모든 처리는 브라우저에서만 이루어집니다"}
         </div>
       </main>
     </div>

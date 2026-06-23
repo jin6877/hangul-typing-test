@@ -64,10 +64,18 @@ export function keystrokesForChar(ch: string): number {
 }
 
 // 문자열 전체 타건수
+// 검증: "안녕하세요" = ㅇㅏㄴ(3)+ㄴㅕㅇ(3)+ㅎㅏ(2)+ㅅㅔ(2)+ㅇㅛ(2) = 12타
+//      "값" = ㄱ+ㅏ+ㅄ(복합종성 2) = 4타, "꿈" = ㄲ(1)+ㅜ+ㅁ = 3타
+// 한컴타자 등 두벌식 실입력 타건수 기준과 일치한다.
 export function keystrokesForText(text: string): number {
   let total = 0;
   for (const ch of text) total += keystrokesForChar(ch);
   return total;
+}
+
+// 분당 단어수(WPM) 표준: 5타(영문은 5글자)를 한 단어로 환산.
+export function wordsForText(text: string): number {
+  return text.length / 5;
 }
 
 export { CHOSEONG, JUNGSEONG, JONGSEONG };
