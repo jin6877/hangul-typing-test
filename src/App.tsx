@@ -12,6 +12,8 @@ interface Result {
   totalChars: number;
   errors: number;
   isBest: boolean;
+  target: string; // 채점 당시 지문 (스냅샷)
+  typed: string; // 채점 당시 친 입력 (스냅샷)
 }
 
 export default function App() {
@@ -123,6 +125,8 @@ export default function App() {
         totalChars: typedLen,
         errors,
         isBest,
+        target,
+        typed: finalTyped,
       });
     },
     [startTime, targetArr, lang, length]
@@ -489,29 +493,8 @@ export default function App() {
               )}
             </div>
 
-            {/* 결과에서만 어디를 틀렸는지 보여준다 */}
-            <div className="mt-6 rounded-xl border border-white/10 bg-black/20 p-4">
-              <div className="mb-2 text-[11px] text-violet-200/40">
-                채점 결과 — 초록은 정답, 빨강은 오타
-              </div>
-              <p className="text-lg leading-relaxed tracking-wide">
-                {targetArr.map((ch, i) => {
-                  const t = typedArr[i];
-                  let cls = "text-violet-200/25"; // 안 친 글자
-                  if (t !== undefined) {
-                    cls =
-                      t === ch
-                        ? "text-emerald-300"
-                        : "bg-rose-500/25 text-rose-300";
-                  }
-                  return (
-                    <span key={i} className={`rounded ${cls}`}>
-                      {ch === " " ? " " : ch}
-                    </span>
-                  );
-                })}
-              </p>
-            </div>
+            {/* 결과에서만 어디를 어떻게 틀렸는지 글자별로 보여준다 */}
+            <CharDiff target={result.target} typed={result.typed} />
 
             <div className="mt-5 flex flex-wrap items-center justify-center gap-x-5 gap-y-1 text-xs text-violet-200/50">
               <span>CPM(글자/분) {result.cpm.toLocaleString()}</span>
@@ -591,6 +574,144 @@ function LiveStat({
     <div className={`rounded-xl border ${ring} px-4 py-3 text-center`}>
       <div className={`text-2xl font-bold tabular-nums ${text}`}>{value}</div>
       <div className="mt-0.5 text-[11px] text-white/40">{label}</div>
+    </div>
+  );
+}
+
+// 빈칸을 눈에 보이게: 공백은 가운뎃점, 빈 입력(엔터로 건너뜀 등)은 ∅
+function displayChar(ch: string | undefined): string {
+  if (ch === undefined || ch === "") return "∅";
+  if (ch === " ") return "␣";
+  return ch;
+}
+
+// 결과 화면 전용: 지문을 글자 단위로 펼쳐 정답/오타/미입력을 시각화한다.
+// 채점과 동일하게 코드포인트(Array.from) 단위로 1:1 매칭한다.
+function CharDiff({ target, typed }: { target: string; typed: string }) {
+  const targetArr = Array.from(target);
+  const typedArr = Array.from(typed);
+  const typedLen = typedArr.length;
+
+  // 틀린 글자 요약: { 지문글자, 친글자 } 목록
+  const mistakes: { idx: number; expected: string; got: string }[] = [];
+  for (let i = 0; i < typedLen; i++) {
+    if (typedArr[i] !== targetArr[i]) {
+      mistakes.push({
+        idx: i,
+        expected: targetArr[i] ?? "",
+        got: typedArr[i] ?? "",
+      });
+    }
+  }
+  const skipped = Math.max(targetArr.length - typedLen, 0);
+
+  return (
+    <div className="mt-6 rounded-xl border border-white/10 bg-black/20 p-4 sm:p-5">
+      {/* 범례 */}
+      <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-violet-200/45">
+        <span className="text-violet-200/55">글자별 채점</span>
+        <span className="flex items-center gap-1.5">
+          <span className="inline-block h-2 w-2 rounded-full bg-emerald-400" />
+          정답
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="inline-block h-2 w-2 rounded-full bg-rose-400" />
+          오타 (친 글자 함께 표시)
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="inline-block h-2 w-2 rounded-full bg-white/25" />
+          미입력
+        </span>
+      </div>
+
+      {/* 글자별 비교 뷰 */}
+      <div className="flex flex-wrap items-end gap-x-1 gap-y-3 leading-none">
+        {targetArr.map((ch, i) => {
+          const isSpace = ch === " ";
+          // 미입력 (엔터로 중간에 끝낸 나머지)
+          if (i >= typedLen) {
+            return (
+              <span
+                key={i}
+                className="inline-flex flex-col items-center gap-1 rounded px-0.5"
+                title="미입력"
+              >
+                <span className="text-2xl text-violet-200/20 sm:text-[26px]">
+                  {isSpace ? "·" : ch}
+                </span>
+                <span className="h-3 text-[9px] text-violet-200/20">·</span>
+              </span>
+            );
+          }
+          const t = typedArr[i];
+          const correct = t === ch;
+          if (correct) {
+            return (
+              <span
+                key={i}
+                className="inline-flex flex-col items-center gap-1 rounded px-0.5"
+              >
+                <span className="text-2xl text-emerald-300 sm:text-[26px]">
+                  {isSpace ? "·" : ch}
+                </span>
+                <span className="h-3 text-[9px] text-emerald-300/0">·</span>
+              </span>
+            );
+          }
+          // 오타: 지문 글자(취소선/로즈) 위, 실제 친 글자 아래 작게
+          return (
+            <span
+              key={i}
+              className="inline-flex flex-col items-center gap-1 rounded bg-rose-500/15 px-1 py-0.5 ring-1 ring-rose-400/30"
+              title={`지문 "${displayChar(ch)}" → 친 글자 "${displayChar(t)}"`}
+            >
+              <span className="text-2xl text-rose-300/70 line-through decoration-rose-400/60 sm:text-[26px]">
+                {isSpace ? "·" : ch}
+              </span>
+              <span className="text-[11px] font-semibold text-rose-200">
+                {displayChar(t)}
+              </span>
+            </span>
+          );
+        })}
+      </div>
+
+      {/* 오타 요약 목록 */}
+      {mistakes.length > 0 ? (
+        <div className="mt-4 border-t border-white/10 pt-3">
+          <div className="mb-2 text-[11px] text-rose-300/60">
+            오타 {mistakes.length}개
+            {skipped > 0 && (
+              <span className="ml-1 text-violet-200/35">· 미입력 {skipped}자</span>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {mistakes.map((m) => (
+              <span
+                key={m.idx}
+                className="inline-flex items-center gap-1 rounded-lg border border-rose-400/25 bg-rose-400/5 px-2 py-1 text-[13px]"
+              >
+                <span className="text-rose-300 line-through decoration-rose-400/50">
+                  {displayChar(m.expected)}
+                </span>
+                <span className="text-rose-300/40">→</span>
+                <span className="font-semibold text-rose-100">
+                  {displayChar(m.got)}
+                </span>
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div className="mt-4 border-t border-white/10 pt-3 text-[11px] text-emerald-300/70">
+          오타 없이 친 분량을 모두 정확히 입력했어요
+          {skipped > 0 && (
+            <span className="ml-1 text-violet-200/35">
+              · 미입력 {skipped}자 (엔터로 종료)
+            </span>
+          )}
+        </div>
+      )}
     </div>
   );
 }
