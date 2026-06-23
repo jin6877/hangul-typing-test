@@ -25,10 +25,11 @@ export default function App() {
   const [best, setBest] = useState<BestRecord | null>(() =>
     getBest("ko", "short")
   );
-  const [maxErrors, setMaxErrors] = useState(0); // 누적 오타(틀린 적 있는 위치 수)
 
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const composingRef = useRef(false);
+  // 확정(append-only)된 입력의 코드포인트 길이. 백스페이스로 이 길이 아래로는 못 줄인다.
+  const lockedLengthRef = useRef(0);
 
   const isEn = lang === "en";
 
@@ -42,17 +43,7 @@ export default function App() {
 
   const targetArr = useMemo(() => Array.from(target), [target]);
 
-  // 글자별 상태 계산 (조합 중 글자 포함된 typed 기준)
-  const charStates = useMemo(() => {
-    const typedArr = Array.from(typed);
-    return targetArr.map((ch, i) => {
-      const t = typedArr[i];
-      if (t === undefined) return "pending" as const;
-      if (t === ch) return "correct" as const;
-      return "wrong" as const;
-    });
-  }, [targetArr, typed]);
-
+  // 커서 위치(현재 입력 길이). 조합 중 글자 포함.
   const caretIndex = Array.from(typed).length;
 
   // 주지표: 한글은 KPM(타/분), 영문은 WPM(단어/분)
@@ -64,35 +55,28 @@ export default function App() {
     [isEn]
   );
 
-  // 실시간 통계
+  // 실시간 통계 (속도/시간/진행도만 — 정답 여부는 절대 노출하지 않음)
   const liveStats = useMemo(() => {
     const elapsed =
       startTime !== null ? Math.max((now - startTime) / 1000, 0.001) : 0;
-    const committed = Array.from(typed);
-    let correctChars = 0;
-    for (let i = 0; i < committed.length; i++) {
-      if (committed[i] === targetArr[i]) correctChars++;
-    }
-    // 입력한 만큼의 목표 텍스트 기준으로 측정 (실제 친 분량만 카운트)
-    const typedTarget = targetArr.slice(0, committed.length).join("");
+    const typedArr = Array.from(typed);
+    // 입력한 만큼의 목표 텍스트 기준으로 속도 측정 (실제 친 분량만 카운트)
+    const typedTarget = targetArr.slice(0, typedArr.length).join("");
     const strokes = keystrokesForText(typedTarget);
     const kpm = elapsed > 0 ? Math.round((strokes / elapsed) * 60) : 0;
     const wpm =
       elapsed > 0 ? Math.round((wordsForText(typedTarget) / elapsed) * 60) : 0;
     const primary = isEn ? wpm : kpm;
-    const accuracy =
-      committed.length > 0
-        ? Math.round((correctChars / committed.length) * 100)
-        : 100;
     const progress =
       targetArr.length > 0
-        ? Math.min(committed.length / targetArr.length, 1)
+        ? Math.min(typedArr.length / targetArr.length, 1)
         : 0;
-    return { elapsed, kpm, wpm, primary, accuracy, progress };
+    return { elapsed, kpm, wpm, primary, progress };
   }, [now, startTime, typed, targetArr, isEn]);
 
   const finishTest = useCallback(
     (finalTyped: string) => {
+      // 코드포인트 단위로 통일해서 채점 (off-by-one / 조합 잔여 방지)
       const typedArr = Array.from(finalTyped);
       // 아무것도 안 친 상태에서의 종료는 의미 없으므로 무시
       if (typedArr.length === 0) return;
@@ -101,8 +85,8 @@ export default function App() {
       const seconds = startTime !== null ? (end - startTime) / 1000 : 0.001;
       const safeSec = Math.max(seconds, 0.001);
 
-      // 실제 친 분량(typed) 기준으로 채점한다.
-      // 친 글자수만큼의 목표 텍스트를 기준 삼아 타수/단어/정확도를 산출.
+      // 채점: 친 각 글자 typed[i] 를 지문의 같은 위치 target[i] 와 1:1 비교.
+      // 백스페이스가 없으므로 typed 는 append-only — 친 분량만큼만 비교한다.
       const typedLen = typedArr.length;
       let correctChars = 0;
       for (let i = 0; i < typedLen; i++) {
@@ -115,9 +99,9 @@ export default function App() {
       const kpm = Math.round((strokes / safeSec) * 60);
       const cpm = Math.round((typedLen / safeSec) * 60);
       const wpm = Math.round((wordsForText(typedTarget) / safeSec) * 60);
-      // 오타: 친 분량 내에서 틀린 위치 수 (누적 오타와 비교해 큰 값)
-      const errors = Math.max(maxErrors, typedLen - correctChars);
-      // 정확도 = 맞은 글자 / 친 글자수 (친 분량 기준)
+      // 오타 = 친 글자수 - 맞은 글자수 (오로지 확정 입력 기준, 조합 중간상태 영향 없음)
+      const errors = typedLen - correctChars;
+      // 정확도 = 맞은 글자 / 친 글자수
       const accuracy =
         typedLen > 0 ? Math.round((correctChars / typedLen) * 100) : 100;
 
@@ -141,40 +125,58 @@ export default function App() {
         isBest,
       });
     },
-    [startTime, targetArr, lang, length, maxErrors]
+    [startTime, targetArr, lang, length]
   );
 
+  // hidden textarea 의 value 가 바뀔 때마다 호출.
+  // 핵심: 확정 길이(lockedLength) 아래로 줄어들면 되돌려서 백스페이스를 무력화한다.
   const applyValue = useCallback(
-    (value: string) => {
+    (rawValue: string, composing: boolean) => {
       if (result) return;
-      if (startTime === null && value.length > 0) {
+
+      const valArr = Array.from(rawValue);
+      const locked = lockedLengthRef.current;
+
+      // 백스페이스 차단: 확정된 길이보다 짧아지면(=확정 글자를 지우려 함) 무시.
+      // 단, 조합 중에는 마지막 글자(미확정)가 자모 단위로 줄었다 늘었다 할 수 있으므로
+      // "확정 길이 미만"만 차단한다. 확정 길이까지는 항상 보존된다.
+      if (valArr.length < locked) {
+        // 확정 프리픽스로 강제 복원
+        const restored = Array.from(typed).slice(0, locked).join("");
+        if (inputRef.current) inputRef.current.value = restored;
+        setTyped(restored);
+        return;
+      }
+
+      // 타이머 시작
+      if (startTime === null && valArr.length > 0) {
         const t = Date.now();
         setStartTime(t);
         setNow(t);
       }
+
       // 목표 길이를 넘어서지 않게 자르기
-      const valArr = Array.from(value);
       const sliced = valArr.slice(0, targetArr.length).join("");
       setTyped(sliced);
 
-      // 현재 틀린 위치 수 누적
-      const slicedArr = Array.from(sliced);
-      let curErrors = 0;
-      for (let i = 0; i < slicedArr.length; i++) {
-        if (slicedArr[i] !== targetArr[i]) curErrors++;
+      // 조합이 끝난 글자는 확정 → 확정 길이 갱신.
+      // 조합 중이면 마지막 글자는 미확정이므로 (길이-1) 까지만 확정으로 본다.
+      if (!composing) {
+        lockedLengthRef.current = Array.from(sliced).length;
+      } else {
+        lockedLengthRef.current = Math.max(
+          lockedLengthRef.current,
+          Array.from(sliced).length - 1
+        );
       }
-      setMaxErrors((m) => Math.max(m, curErrors));
 
-      // 완료 판정: IME 조합이 끝난 상태에서 마지막 글자까지 정확히 입력됨
-      if (
-        !composingRef.current &&
-        slicedArr.length >= targetArr.length &&
-        slicedArr.every((c, i) => c === targetArr[i])
-      ) {
+      // 완료 판정: IME 조합이 끝난 상태에서 지문 끝까지 도달
+      const slicedArr = Array.from(sliced);
+      if (!composing && slicedArr.length >= targetArr.length) {
         finishTest(sliced);
       }
     },
-    [result, startTime, targetArr, finishTest]
+    [result, startTime, targetArr, typed, finishTest]
   );
 
   const reset = useCallback(
@@ -186,10 +188,11 @@ export default function App() {
       setTyped("");
       setStartTime(null);
       setResult(null);
-      setMaxErrors(0);
       setNow(Date.now());
-      setBest(getBest(l, len));
       composingRef.current = false;
+      lockedLengthRef.current = 0;
+      if (inputRef.current) inputRef.current.value = "";
+      setBest(getBest(l, len));
       setTimeout(() => inputRef.current?.focus(), 0);
     },
     [lang, length, target]
@@ -207,12 +210,24 @@ export default function App() {
     reset({ length: len });
   };
 
-  // 키보드 단축키
+  // 키보드 단축키 + 백스페이스 차단(보강)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Tab") {
         e.preventDefault();
         reset();
+        return;
+      }
+      // 백스페이스/딜리트 1차 차단: 결과 화면이 아니고 입력 중일 때.
+      // 조합 중(IME)에는 자모 삭제가 브라우저 내부 동작이라 완전 차단이 어려우므로
+      // applyValue 의 lockedLength 복원 로직이 2차 방어선이 된다.
+      if (
+        (e.key === "Backspace" || e.key === "Delete") &&
+        !result &&
+        !e.isComposing &&
+        !composingRef.current
+      ) {
+        e.preventDefault();
         return;
       }
       if (e.key === "Enter") {
@@ -223,7 +238,7 @@ export default function App() {
           // 결과 표시 중 → 다음 문장으로
           reset();
         } else if (Array.from(typed).length > 0) {
-          // 한 글자라도 쳤으면 → 틀려도/덜 쳤어도 그 시점까지 무조건 종료 & 채점
+          // 한 글자라도 쳤으면 → 그 시점까지 무조건 종료 & 채점
           finishTest(typed);
         }
         // 아무것도 안 친 상태의 엔터는 무시(0타 결과는 의미 없음)
@@ -240,6 +255,8 @@ export default function App() {
   const bestLabel = isEn ? "WPM" : "타/분";
   const bestValue = best ? (isEn ? best.wpm : best.kpm) : null;
 
+  const typedArr = Array.from(typed);
+
   return (
     <div className="min-h-svh w-full bg-[#0b0a12] font-mono text-violet-50 selection:bg-violet-500/40">
       {/* 배경 글로우 */}
@@ -253,15 +270,14 @@ export default function App() {
         <header className="flex flex-col items-center gap-3 text-center">
           <div className="flex items-center gap-2 rounded-full border border-violet-400/30 bg-violet-400/5 px-3 py-1 text-xs text-violet-300">
             <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-violet-400" />
-            한글 · 영문 타이핑 속도 테스트
+            백스페이스 없는 정확도 타이핑 게임
           </div>
           <h1 className="bg-gradient-to-r from-violet-300 via-fuchsia-200 to-rose-300 bg-clip-text text-3xl font-bold tracking-tight text-transparent sm:text-4xl">
-            타닥타닥 · 타이핑 측정기
+            타닥타닥 · 한 번에 끝까지
           </h1>
           <p className="max-w-md text-sm text-violet-200/60">
-            {isEn
-              ? "영문 지문으로 WPM(분당 단어)과 정확도를 실시간으로 측정합니다."
-              : "자모 분해 기반의 정확한 한글 타수(KPM)와 정확도를 실시간으로 측정합니다."}
+            백스페이스 없이 한 번에! 맞았는지 틀렸는지는 끝나고 결과에서
+            확인하세요.
           </p>
         </header>
 
@@ -325,24 +341,20 @@ export default function App() {
           />
         </div>
 
-        {/* 지문 표시 영역 */}
+        {/* 지문 표시 영역 — 중립 색만, 정답/오답 피드백 없음 */}
         <section
           onClick={() => inputRef.current?.focus()}
           className="relative cursor-text rounded-2xl border border-white/10 bg-[#13111d]/80 p-6 shadow-2xl shadow-black/40 backdrop-blur sm:p-8"
         >
           <p className="text-2xl leading-relaxed tracking-wide sm:text-[28px] sm:leading-[1.7]">
             {targetArr.map((ch, i) => {
-              const state = charStates[i];
+              const passed = i < caretIndex; // 이미 지나간 글자(맞고 틀림은 표시 안 함)
               const isCaret = i === caretIndex && !result;
               return (
                 <span
                   key={i}
                   className={`relative whitespace-pre-wrap rounded transition-colors duration-75 ${
-                    state === "correct"
-                      ? "text-emerald-300"
-                      : state === "wrong"
-                        ? "bg-rose-500/25 text-rose-300"
-                        : "text-violet-200/30"
+                    passed ? "text-violet-100/70" : "text-violet-200/30"
                   }`}
                 >
                   {isCaret && (
@@ -357,17 +369,29 @@ export default function App() {
             )}
           </p>
 
-          {/* 숨겨진 입력창 (IME 조합 처리) */}
+          {/* 숨겨진 입력창 (IME 조합 처리) — value 는 state 로 제어해 백스페이스를 무력화 */}
           <textarea
             ref={inputRef}
             value={typed}
-            onChange={(e) => applyValue(e.target.value)}
+            onChange={(e) =>
+              applyValue(e.target.value, composingRef.current)
+            }
             onCompositionStart={() => {
               composingRef.current = true;
             }}
             onCompositionEnd={(e) => {
               composingRef.current = false;
-              applyValue(e.currentTarget.value);
+              applyValue(e.currentTarget.value, false);
+            }}
+            onKeyDown={(e) => {
+              // textarea 자체에서도 백스페이스/딜리트를 차단(조합 중이 아닐 때)
+              if (
+                (e.key === "Backspace" || e.key === "Delete") &&
+                !e.nativeEvent.isComposing &&
+                !composingRef.current
+              ) {
+                e.preventDefault();
+              }
             }}
             disabled={!!result}
             spellCheck={false}
@@ -378,7 +402,19 @@ export default function App() {
           />
         </section>
 
-        {/* 실시간 통계 (결과 없을 때) */}
+        {/* 안내 배지 */}
+        {!result && (
+          <div className="flex flex-wrap items-center justify-center gap-2 text-[11px]">
+            <span className="rounded-full border border-rose-400/20 bg-rose-400/5 px-3 py-1 text-rose-200/70">
+              ⌫ 백스페이스 금지 — 한 번 친 글자는 못 지웁니다
+            </span>
+            <span className="rounded-full border border-violet-400/20 bg-violet-400/5 px-3 py-1 text-violet-200/70">
+              결과는 끝나고 확인 — 정답·오답 미리보기 없음
+            </span>
+          </div>
+        )}
+
+        {/* 실시간 통계 (결과 없을 때) — 속도/입력량/시간만, 정확도는 비공개 */}
         {!result && (
           <div className="grid grid-cols-3 gap-3">
             <LiveStat
@@ -387,8 +423,8 @@ export default function App() {
               accent="violet"
             />
             <LiveStat
-              label="정확도"
-              value={`${liveStats.accuracy}%`}
+              label="입력"
+              value={`${typedArr.length} / ${targetArr.length}`}
               accent="emerald"
             />
             <LiveStat
@@ -447,10 +483,34 @@ export default function App() {
               )}
             </div>
 
+            {/* 결과에서만 어디를 틀렸는지 보여준다 */}
+            <div className="mt-6 rounded-xl border border-white/10 bg-black/20 p-4">
+              <div className="mb-2 text-[11px] text-violet-200/40">
+                채점 결과 — 초록은 정답, 빨강은 오타
+              </div>
+              <p className="text-lg leading-relaxed tracking-wide">
+                {targetArr.map((ch, i) => {
+                  const t = typedArr[i];
+                  let cls = "text-violet-200/25"; // 안 친 글자
+                  if (t !== undefined) {
+                    cls =
+                      t === ch
+                        ? "text-emerald-300"
+                        : "bg-rose-500/25 text-rose-300";
+                  }
+                  return (
+                    <span key={i} className={`rounded ${cls}`}>
+                      {ch === " " ? " " : ch}
+                    </span>
+                  );
+                })}
+              </p>
+            </div>
+
             <div className="mt-5 flex flex-wrap items-center justify-center gap-x-5 gap-y-1 text-xs text-violet-200/50">
               <span>CPM(글자/분) {result.cpm.toLocaleString()}</span>
               <span>·</span>
-              <span>전체 {result.totalChars}자</span>
+              <span>입력 {result.totalChars}자</span>
               <span>·</span>
               <span className="text-rose-300/70">오타 {result.errors}개</span>
             </div>
@@ -494,9 +554,8 @@ export default function App() {
         )}
 
         <div className="mt-auto pt-4 text-center text-[11px] text-violet-200/30">
-          {isEn
-            ? "표준 WPM(5타=1단어) 환산 · 모든 처리는 브라우저에서만 이루어집니다"
-            : "자모(초성·중성·종성) 분해 기반 타건수 계산 · 모든 처리는 브라우저에서만 이루어집니다"}
+          백스페이스 없이 입력한 분량을 글자별로 1:1 채점 · 모든 처리는
+          브라우저에서만 이루어집니다
         </div>
       </main>
     </div>
