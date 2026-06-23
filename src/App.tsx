@@ -203,14 +203,24 @@ export default function App() {
       if (e.key === "Tab") {
         e.preventDefault();
         reset();
-      } else if (result && e.key === "Enter") {
+        return;
+      }
+      if (e.key === "Enter") {
+        // 한글 IME 조합 중의 엔터(조합 확정)는 무시
+        if (e.isComposing || composingRef.current) return;
         e.preventDefault();
-        reset();
+        if (result) {
+          // 결과 표시 중 → 다음 문장으로
+          reset();
+        } else if (startTime !== null) {
+          // 타이핑 중(측정 시작됨) → 현재 측정 종료 & 결과 확정
+          finishTest(typed);
+        }
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [reset, result]);
+  }, [reset, result, startTime, typed, finishTest]);
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -442,6 +452,12 @@ export default function App() {
                 다음 문장 →
               </button>
             </div>
+            <p className="mt-3 text-center text-[11px] text-fuchsia-300/40">
+              <kbd className="rounded bg-fuchsia-400/15 px-1.5 py-0.5 text-fuchsia-200/80">
+                Enter
+              </kbd>{" "}
+              로 다음 문장
+            </p>
           </div>
         )}
 
@@ -456,6 +472,12 @@ export default function App() {
             </button>
             <span className="hidden sm:inline">
               <kbd className="rounded bg-white/10 px-1.5 py-0.5">Tab</kbd> 새 문장
+            </span>
+            <span className="text-fuchsia-300/50">
+              <kbd className="rounded bg-fuchsia-400/15 px-1.5 py-0.5 text-fuchsia-200/80">
+                Enter
+              </kbd>{" "}
+              로 완료 · 한 번 더 누르면 다음 문장
             </span>
           </div>
         )}
