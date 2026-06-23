@@ -93,23 +93,33 @@ export default function App() {
 
   const finishTest = useCallback(
     (finalTyped: string) => {
+      const typedArr = Array.from(finalTyped);
+      // 아무것도 안 친 상태에서의 종료는 의미 없으므로 무시
+      if (typedArr.length === 0) return;
+
       const end = Date.now();
       const seconds = startTime !== null ? (end - startTime) / 1000 : 0.001;
-      const typedArr = Array.from(finalTyped);
+      const safeSec = Math.max(seconds, 0.001);
+
+      // 실제 친 분량(typed) 기준으로 채점한다.
+      // 친 글자수만큼의 목표 텍스트를 기준 삼아 타수/단어/정확도를 산출.
+      const typedLen = typedArr.length;
       let correctChars = 0;
-      for (let i = 0; i < targetArr.length; i++) {
+      for (let i = 0; i < typedLen; i++) {
         if (typedArr[i] === targetArr[i]) correctChars++;
       }
-      const totalStrokes = keystrokesForText(target);
-      const safeSec = Math.max(seconds, 0.001);
-      const kpm = Math.round((totalStrokes / safeSec) * 60);
-      const cpm = Math.round((targetArr.length / safeSec) * 60);
-      const wpm = Math.round((wordsForText(target) / safeSec) * 60);
-      const errors = Math.max(maxErrors, targetArr.length - correctChars);
+      // 측정 대상 = 입력한 만큼의 목표 텍스트 (실제 친 분량)
+      const typedTarget = targetArr.slice(0, typedLen).join("");
+
+      const strokes = keystrokesForText(typedTarget);
+      const kpm = Math.round((strokes / safeSec) * 60);
+      const cpm = Math.round((typedLen / safeSec) * 60);
+      const wpm = Math.round((wordsForText(typedTarget) / safeSec) * 60);
+      // 오타: 친 분량 내에서 틀린 위치 수 (누적 오타와 비교해 큰 값)
+      const errors = Math.max(maxErrors, typedLen - correctChars);
+      // 정확도 = 맞은 글자 / 친 글자수 (친 분량 기준)
       const accuracy =
-        targetArr.length > 0
-          ? Math.round((correctChars / targetArr.length) * 100)
-          : 100;
+        typedLen > 0 ? Math.round((correctChars / typedLen) * 100) : 100;
 
       const rec: BestRecord = {
         kpm,
@@ -126,12 +136,12 @@ export default function App() {
         wpm,
         accuracy,
         seconds: safeSec,
-        totalChars: targetArr.length,
+        totalChars: typedLen,
         errors,
         isBest,
       });
     },
-    [startTime, target, targetArr, lang, length, maxErrors]
+    [startTime, targetArr, lang, length, maxErrors]
   );
 
   const applyValue = useCallback(
@@ -212,15 +222,16 @@ export default function App() {
         if (result) {
           // 결과 표시 중 → 다음 문장으로
           reset();
-        } else if (startTime !== null) {
-          // 타이핑 중(측정 시작됨) → 현재 측정 종료 & 결과 확정
+        } else if (Array.from(typed).length > 0) {
+          // 한 글자라도 쳤으면 → 틀려도/덜 쳤어도 그 시점까지 무조건 종료 & 채점
           finishTest(typed);
         }
+        // 아무것도 안 친 상태의 엔터는 무시(0타 결과는 의미 없음)
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [reset, result, startTime, typed, finishTest]);
+  }, [reset, result, typed, finishTest]);
 
   useEffect(() => {
     inputRef.current?.focus();
